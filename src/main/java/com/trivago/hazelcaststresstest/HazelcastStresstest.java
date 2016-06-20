@@ -10,6 +10,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -109,11 +110,12 @@ public class HazelcastStresstest
 
         ExecutorCompletionService<Boolean> completionService = new ExecutorCompletionService<Boolean>(executorService);
 
+        // #############################################################################
+        // CompletionService results need to be collected!
         AtomicBoolean shutdown = new AtomicBoolean(false);
         new Thread(() -> {
             while(!shutdown.get()) {
                 try {
-                    // CompletionService results need to be collected!
                     completionService.take();
                 } catch (InterruptedException e) {
                     e.printStackTrace();
@@ -121,6 +123,8 @@ public class HazelcastStresstest
                 Thread.yield();
             }
         }).start();
+        // CompletionService results need to be collected!
+        // #############################################################################
 
         // 2 counter that count what we submitted to the completionService and was what actual put
         AtomicLong submittedItemCount = new AtomicLong();
@@ -138,6 +142,7 @@ public class HazelcastStresstest
     private void populateOnce(ExecutorCompletionService<Boolean> completionService, AtomicLong submittedItemCount,
                               AtomicLong putItemCount, int prefix) throws Exception
     {
+        ThreadLocalRandom random = ThreadLocalRandom.current();
         cacheEntries.stream()
                 .forEach(value -> {
                 	submittedItemCount.incrementAndGet();
@@ -147,7 +152,8 @@ public class HazelcastStresstest
                         try {
                             map.putAsync(key, value, 0L, TimeUnit.MILLISECONDS);
                         } catch (HazelcastOverloadException e) {
-                            Thread.sleep(100);
+                            // Wait 50 - 150ms for resubmit
+                            Thread.sleep(random.nextInt(100) + 50);
                             break retry;
                         }
 
