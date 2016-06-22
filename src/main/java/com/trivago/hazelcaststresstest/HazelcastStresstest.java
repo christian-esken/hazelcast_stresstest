@@ -5,16 +5,27 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.client.config.ClientConfig;
+import com.hazelcast.config.Config;
+import com.hazelcast.core.ExecutionCallback;
+import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.core.HazelcastOverloadException;
+import com.hazelcast.core.ICompletableFuture;
 import com.hazelcast.core.IMap;
+import com.hazelcast.nio.serialization.HazelcastSerializationException;
 
 /**
  * Stress-testing Hazelcast client. Uses client-server mode.
@@ -36,6 +47,9 @@ import com.hazelcast.core.IMap;
  * 
  * @author christian.esken@trivago.com
  *
+ *
+ * START WITH: -XX:+UseConcMarkSweepGC
+ *
  */
 public class HazelcastStresstest
 {
@@ -44,8 +58,8 @@ public class HazelcastStresstest
     // Hazelcast config
 	String addresses[]  = { "127.0.0.1:5701",  "127.0.0.2:5701"}; // Change this
 	String cacheName = "blcacheinmem";
-    String groupConfigName = "mapCluster1";
-    String groupConfigPass = "cluster1pass";
+    String groupConfigName = "dev";
+    String groupConfigPass = "dev";
     int executorPoolSize = 10;
 
     // Cache entries: Number of entries is entryCount * multiplier
@@ -96,6 +110,22 @@ public class HazelcastStresstest
 
         ExecutorCompletionService<Boolean> completionService = new ExecutorCompletionService<Boolean>(executorService);
 
+        // #############################################################################
+        // CompletionService results need to be collected!
+        AtomicBoolean shutdown = new AtomicBoolean(false);
+        new Thread(() -> {
+            while(!shutdown.get()) {
+                try {
+                    completionService.take();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                Thread.yield();
+            }
+        }).start();
+        // CompletionService results need to be collected!
+        // #############################################################################
+
         // 2 counter that count what we submitted to the completionService and was what actual put
         AtomicLong submittedItemCount = new AtomicLong();
         AtomicLong putItemCount = new AtomicLong();
@@ -106,17 +136,27 @@ public class HazelcastStresstest
         		System.out.println();
             populateOnce(completionService, submittedItemCount, putItemCount, factor);
         }
+        shutdown.set(true);
     }
 
-    private void populateOnce(ExecutorCompletionService<Boolean> completionService, AtomicLong submittedItemCount, AtomicLong putItemCount, int prefix)
+    private void populateOnce(ExecutorCompletionService<Boolean> completionService, AtomicLong submittedItemCount,
+                              AtomicLong putItemCount, int prefix) throws Exception
     {
+        ThreadLocalRandom random = ThreadLocalRandom.current();
         cacheEntries.stream()
                 .forEach(value -> {
                 	submittedItemCount.incrementAndGet();
                     CacheKeyType key = new CacheKeyType(prefix + "-" + value.key());
                     completionService.submit(() -> {
-//                        map.put(key, value, 0L, TimeUnit.MILLISECONDS);
-                        map.putAsync(key, value, 0L, TimeUnit.MILLISECONDS);
+                        retry:
+                        try {
+                            map.putAsync(key, value, 0L, TimeUnit.MILLISECONDS);
+                        } catch (HazelcastOverloadException e) {
+                            // Wait 50 - 150ms for resubmit
+                            Thread.sleep(random.nextInt(100) + 50);
+                            break retry;
+                        }
+
                         putItemCount.incrementAndGet();
                         return true;
                     });
@@ -146,7 +186,10 @@ public class HazelcastStresstest
 	HazelcastInstance initCache(String mapName, String[] addresses, String groupConfigName2, String pass, int executorPoolSize)
 	{
         ClientConfig config = new ClientConfig();
-		config.getGroupConfig().setName(groupConfigName2).setPassword(pass);
+        config.setProperty("hazelcast.client.max.concurrent.invocations", "10000");
+        config.setProperty("hazelcast.backpressure.enabled", "true");
+
+        //config.getGroupConfig().setName(groupConfigName2).setPassword(pass);
         config.getNetworkConfig().addAddress(addresses);
         config.setExecutorPoolSize(executorPoolSize);
 
