@@ -5,11 +5,8 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -18,14 +15,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.client.config.ClientConfig;
-import com.hazelcast.config.Config;
-import com.hazelcast.core.ExecutionCallback;
-import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.HazelcastOverloadException;
-import com.hazelcast.core.ICompletableFuture;
 import com.hazelcast.core.IMap;
-import com.hazelcast.nio.serialization.HazelcastSerializationException;
 
 /**
  * Stress-testing Hazelcast client. Uses client-server mode.
@@ -34,9 +26,15 @@ import com.hazelcast.nio.serialization.HazelcastSerializationException;
  * - Set "addresses" to your Hazelcast server nodes. We use 2 nodes.
  * - Adjust entryCount. The higher the number, the faster you get OOM issues
  * 
- * If running as-is, Hazelcast hangs on to 2 million ClientMessage objects with overall size 3GB.
+ * v0.0.1 status
+ * If running as-is (before applying some cahnges), Hazelcast hangs on to 2 million ClientMessage objects with overall size 3GB.
  * Many major collections happen. Result: The application dies with an OOM issue. Or - if you are lucky - 
  * the HazelcastInstance dies (e.g. heartbeat miss due to OOM) and the memory held by it is freed by GC.
+ * 
+ * v0.0.2
+ * Changes applied (these make the applications stable)
+ * - Backpressure
+ * - Consuming the Future's 
  * 
  * Making the client die slower:
  * - entryCount = 10_000;
@@ -58,8 +56,8 @@ public class HazelcastStresstest
     // Hazelcast config
 	String addresses[]  = { "127.0.0.1:5701",  "127.0.0.2:5701"}; // Change this
 	String cacheName = "blcacheinmem";
-    String groupConfigName = "dev";
-    String groupConfigPass = "dev";
+    String groupConfigName = "mapCluster1"; // Test settings. Do not reuse credentials!
+    String groupConfigPass = "cluster1pass"; // Test settings. Ddo not reuse credentials!
     int executorPoolSize = 10;
 
     // Cache entries: Number of entries is entryCount * multiplier
@@ -189,7 +187,7 @@ public class HazelcastStresstest
         config.setProperty("hazelcast.client.max.concurrent.invocations", "10000");
         config.setProperty("hazelcast.backpressure.enabled", "true");
 
-        //config.getGroupConfig().setName(groupConfigName2).setPassword(pass);
+        config.getGroupConfig().setName(groupConfigName2).setPassword(pass);
         config.getNetworkConfig().addAddress(addresses);
         config.setExecutorPoolSize(executorPoolSize);
 
